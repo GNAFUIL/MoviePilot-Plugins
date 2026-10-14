@@ -17,6 +17,7 @@ import sqlite3
 import subprocess
 import urllib.request
 import urllib.parse
+import http.cookiejar
 import threading
 from datetime import datetime, timedelta
 from typing import Any, List, Dict, Optional, Tuple
@@ -84,6 +85,7 @@ class BrushReseed(_PluginBase):
     # 生命周期
     # ==================================================================
     def init_plugin(self, config: dict = None):
+        logger.info("刷流转移续种：init_plugin 被调用")
         self.stop_service()
         if config:
             self._enabled = config.get("enabled")
@@ -96,10 +98,10 @@ class BrushReseed(_PluginBase):
             self._notify = config.get("notify")
             self._use_tag_filter = config.get("use_tag_filter")
             self._tags = config.get("tags") or ""
-            self._hdd_free_gb = float(config.get("hdd_free_gb") or 1024)
-            self._trigger_size_gb = float(config.get("trigger_size_gb") or 150)
-            self._ssd_free_gb = float(config.get("ssd_free_gb") or 150)
-            self._max_interval_h = float(config.get("max_interval_h") or 12)
+            self._hdd_free_gb = float(config.get("hdd_free_gb") if config.get("hdd_free_gb") is not None else 1024)
+            self._trigger_size_gb = float(config.get("trigger_size_gb") if config.get("trigger_size_gb") is not None else 150)
+            self._ssd_free_gb = float(config.get("ssd_free_gb") if config.get("ssd_free_gb") is not None else 150)
+            self._max_interval_h = float(config.get("max_interval_h") if config.get("max_interval_h") is not None else 12)
             self._tr_enable = config.get("tr_enable")
             self._tr_remove_qbt = config.get("tr_remove_qbt")
             self._tr_url = config.get("tr_url") or ""
@@ -109,6 +111,7 @@ class BrushReseed(_PluginBase):
             self._seed_tag = config.get("seed_tag") or "刷流保种"
 
         if self._enabled:
+            logger.info(f"刷流转移续种：启用，onlyonce={self._onlyonce} cron={self._cron} 触发={self._trigger_size_gb}")
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
             if self._onlyonce:
                 logger.info("刷流转移续种：立即运行一次")
@@ -116,16 +119,6 @@ class BrushReseed(_PluginBase):
                                         run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=5),
                                         name="刷流转移续种-立即")
                 self._onlyonce = False
-                self.update_config({"enabled": self._enabled, "onlyonce": False, "cron": self._cron,
-                                    "downloader": self._downloader, "frompath": self._frompath,
-                                    "topath": self._topath, "autostart": self._autostart,
-                                    "notify": self._notify, "use_tag_filter": self._use_tag_filter,
-                                    "tags": self._tags, "hdd_free_gb": self._hdd_free_gb,
-                                    "trigger_size_gb": self._trigger_size_gb, "ssd_free_gb": self._ssd_free_gb,
-                                    "max_interval_h": self._max_interval_h, "tr_enable": self._tr_enable,
-                                    "tr_remove_qbt": self._tr_remove_qbt, "tr_url": self._tr_url,
-                                    "tr_user": self._tr_user, "tr_pass": self._tr_pass,
-                                    "tag_sync": self._tag_sync, "seed_tag": self._seed_tag})
             else:
                 try:
                     self._scheduler.add_job(self.transfer, 'cron', **self._parse_cron(self._cron),
@@ -252,6 +245,7 @@ class BrushReseed(_PluginBase):
                     self._qbt_url = 'http://' + host
                     self._qbt_user = c.get('username') or ''
                     self._qbt_pass = c.get('password') or ''
+                    logger.info(f"刷流转移续种：qbt连接 url={self._qbt_url} user={self._qbt_user} passlen={len(self._qbt_pass)}")
                     return
         except Exception as e:
             logger.error(f"读取下载器配置失败：{e}")
@@ -260,32 +254,28 @@ class BrushReseed(_PluginBase):
 
     def _qbt_login(self):
         self._resolve_qbt_conn()
+        self._qbt_cookies = http.cookiejar.CookieJar()
+        self._qbt_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._qbt_cookies))
         data = urllib.parse.urlencode({'username': self._qbt_user, 'password': self._qbt_pass}).encode()
         req = urllib.request.Request(self._qbt_url + '/api/v2/auth/login', data=data, method='POST')
         req.add_header('Content-Type', 'application/x-www-form-urlencoded')
         try:
-            r = urllib.request.urlopen(req, timeout=15)
+            r = self._qbt_opener.open(req, timeout=15)
             body = r.read().decode().strip()
-            sid = None
-            for c in r.headers.get_all('Set-Cookie') or []:
-                if 'QBT_SID' in c:
-                    sid = c.split('QBT_SID')[1].split(';')[0]
-            if body == 'Ok.' or sid:
-                self._qbt_sid = sid
+            has = any('QBT_SID' in c.name for c in self._qbt_cookies)
+            if body == 'Ok.' or has:
                 return True
             raise Exception(f"qbt 登录失败：{body}")
         except Exception as e:
             raise Exception(f"qbt 登录异常：{e}")
 
     def _qbt(self, path, params=None, is_json=False):
-        if not self._qbt_url:
+        if not getattr(self, '_qbt_opener', None):
             self._qbt_login()
         url = self._qbt_url + path
         data = urllib.parse.urlencode(params).encode() if params else None
         req = urllib.request.Request(url, data=data, method='POST' if params else 'GET')
-        if self._qbt_sid:
-            req.add_header('Cookie', 'QBT_SID=' + self._qbt_sid)
-        r = urllib.request.urlopen(req, timeout=60)
+        r = self._qbt_opener.open(req, timeout=60)
         body = r.read().decode()
         return json.loads(body) if is_json else body
 
@@ -438,12 +428,13 @@ class BrushReseed(_PluginBase):
 
     def _should_transfer(self):
         frompath = os.path.normpath(self._frompath)
+        frompaths = [os.path.normpath(x.strip()) for x in self._frompath.split(",") if x.strip()]
         completed = 0
         try:
             for t in (self._qbt("/api/v2/torrents/info", is_json=True) or []):
                 sp = os.path.normpath(t.get("save_path") or "")
                 cp = os.path.normpath(t.get("content_path") or "")
-                if (sp == frompath or sp.startswith(frompath + os.sep)) and (t.get("progress") or 0) >= 1 and cp.startswith(frompath):
+                if any(sp == fp or sp.startswith(fp + os.sep) for fp in frompaths) and (t.get("progress") or 0) >= 1:
                     completed += int(t.get("size") or 0)
         except Exception as e:
             logger.warning(f"触发检查:读种子出错 {e}")
@@ -477,27 +468,23 @@ class BrushReseed(_PluginBase):
             logger.warning(f"写转移时间失败：{e}")
 
     def transfer(self):
+        logger.info("刷流转移续种：transfer 开始执行")
         try:
             if not self._should_transfer():
                 return
         except Exception as e:
             logger.warning(f"触发检查异常，继续转移: {e}")
         logger.info("开始扫描刷流种子…")
-        frompath = os.path.normpath(self._frompath)
+        frompaths = [os.path.normpath(x.strip()) for x in self._frompath.split(",") if x.strip()]
         topath = os.path.normpath(self._topath)
-        if not os.path.exists(frompath):
-            logger.warning(f"源目录不存在：{frompath}")
+        if not any(os.path.exists(fp) for fp in frompaths):
+            logger.warning(f"源目录都不存在：{frompaths}")
             return
         os.makedirs(topath, exist_ok=True)
         try:
             os.chmod(topath, 0o777)
         except Exception:
             pass
-        try:
-            self._qbt_login()
-        except Exception as e:
-            logger.error(str(e))
-            return
         try:
             _all = self._qbt("/api/v2/torrents/info", is_json=True) or []
             torrents = [t for t in _all if (t.get("progress") or 0) >= 1]
@@ -512,7 +499,7 @@ class BrushReseed(_PluginBase):
                 name = t.get("name") or ""
                 save_path = os.path.normpath(t.get("save_path") or t.get("content_path") or "")
                 tags = [x.strip() for x in (t.get("tags") or "").replace("，", ",").split(",") if x.strip()]
-                if not (save_path == frompath or save_path.startswith(frompath + os.sep)):
+                if not any(save_path == fp or save_path.startswith(fp + os.sep) for fp in frompaths):
                     continue
                 if tag_filter and not (set(tags) & tag_filter):
                     continue

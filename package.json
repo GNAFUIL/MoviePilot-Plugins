@@ -2,7 +2,7 @@
   "BrushReseed": {
     "name": "刷流转移续种",
     "description": "把做流已完成的刷流种子从固态移到机械盘保种，校验续种/转TR长期保种。动态触发、种子标签同步转移、机械盘清理。只碰刷流目录，不碰媒体库。",
-    "version": "1.0",
+    "version": "1.1",
     "icon": "",
     "author": "assistant",
     "author_url": "",

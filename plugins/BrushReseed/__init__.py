@@ -39,7 +39,7 @@ class BrushReseed(_PluginBase):
     plugin_name = "刷流转移续种"
     plugin_desc = "把做流已完成的刷流种子从固态移到机械盘保种，校验续种；可转TR长期保种。动态触发、标签同步、清理。不碰媒体库。"
     plugin_icon = "brushreseed.png"
-    plugin_version = "1.0"
+    plugin_version = "1.1"
     plugin_author = "assistant"
     author_url = ""
     plugin_config_prefix = "brushreseed_"

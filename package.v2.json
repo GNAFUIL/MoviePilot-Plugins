@@ -2,11 +2,13 @@
   "BrushReseed": {
     "name": "刷流转移续种",
     "description": "把做流已完成的刷流种子从固态移到机械盘保种，校验续种/转TR长期保种。动态触发、种子标签同步转移、机械盘清理。",
-    "version": "1.2",
+    "version": "1.3",
     "icon": "",
     "author": "assistant",
     "author_url": "",
-    "history": {},
+    "history": {
+      "v1.3": "修复转种丢tracker:TR4.x用trackerList;metainfo注入announce"
+    },
     "v2": true,
     "v3": true
   }

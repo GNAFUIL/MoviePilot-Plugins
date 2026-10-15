@@ -306,10 +306,14 @@ class BrushReseed(_PluginBase):
     def _get_tracker(self, h):
         try:
             trks = self._qbt("/api/v2/torrents/trackers?hash=" + h, is_json=True) or []
-            for tk in trks:
-                u = tk.get("url") or ""
-                if u.startswith("http") and "announce" in u:
-                    return u
+            http_trks = [tk.get("url") or "" for tk in trks
+                         if (tk.get("url") or "").startswith("http") and "announce" in (tk.get("url") or "")]
+            # 只在【唯一】一个 tracker 时采用，避免多站点混用/取错
+            if len(http_trks) == 1:
+                return http_trks[0]
+            if len(http_trks) > 1:
+                logger.warning(f"转TR: 种子 {h[:8]} 有 {len(http_trks)} 个tracker，为避免取错不自动补tracker")
+            return None
         except Exception:
             pass
         return None

@@ -9,6 +9,7 @@
 新增：种子标签同步转移(把 qbt 种子标签同步到 TR，并打保种标记)。
 """
 import os
+import re
 import time
 import json
 import shutil
@@ -39,7 +40,7 @@ class BrushReseed(_PluginBase):
     plugin_name = "刷流转移续种"
     plugin_desc = "把做流已完成的刷流种子从固态移到机械盘保种，校验续种；可转TR长期保种。动态触发、标签同步、清理。不碰媒体库。"
     plugin_icon = "brushreseed.png"
-    plugin_version = "1.1"
+    plugin_version = "1.3"
     plugin_author = "assistant"
     author_url = ""
     plugin_config_prefix = "brushreseed_"
@@ -346,6 +347,14 @@ class BrushReseed(_PluginBase):
         _trk = self._get_tracker(h)
         if _trk:
             raw_meta = self._inject_tracker(raw_meta, _trk)
+        else:
+            # qbt 里查不到时，从种子 metainfo 自带 announce 提取(兜底)
+            try:
+                m = re.search(rb'8:announce(\d+):', raw_meta)
+                if m:
+                    _trk = raw_meta[m.end():m.end()+int(m.group(1))].decode('utf-8', 'replace')
+            except Exception:
+                pass
         meta = base64.b64encode(raw_meta).decode()
         try:
             res = self._tr_rpc('torrent-add', {'metainfo': meta, 'download-dir': self._topath, 'paused': True})
@@ -364,7 +373,8 @@ class BrushReseed(_PluginBase):
                 try:
                     u = self._get_tracker(h)
                     if u:
-                        self._tr_rpc('torrent-set', {'ids': [tid], 'trackerAdd': [u]})
+                        # Transmission 4.x 必须用 trackerList；trackerAdd 会被静默忽略
+                        self._tr_rpc('torrent-set', {'ids': [tid], 'trackerList': u})
                 except Exception as e:
                     logger.warning(f"转TR: 补 tracker 出错 {e}")
                 # 标签同步转移：把 qbt 标签同步到 TR + 打保种标记

@@ -303,6 +303,20 @@ class BrushReseed(_PluginBase):
                 return json.loads(r.read().decode())
             raise
 
+    def _inject_tracker(self, meta_bytes, tracker_url):
+        """把 announce tracker 注入 bencode 种子 metainfo(qbt 备份常无 announce，TR 的 trackerAdd 又不生效)。"""
+        try:
+            if b"announce" in meta_bytes:
+                return meta_bytes
+            au = tracker_url.encode() if isinstance(tracker_url, str) else tracker_url
+            # 在 bencode 字典开头(首个 d 后)插入 announce< len>:<url>
+            entry = b"8:announce" + str(len(au)).encode() + b":" + au
+            if meta_bytes[:1] == b"d":
+                return b"d" + entry + meta_bytes[1:]
+            return entry + meta_bytes
+        except Exception:
+            return meta_bytes
+
     def _get_tracker(self, h):
         try:
             trks = self._qbt("/api/v2/torrents/trackers?hash=" + h, is_json=True) or []
@@ -327,7 +341,12 @@ class BrushReseed(_PluginBase):
             logger.warning(f"转TR: 找不到 {name} 的 .torrent({tp})")
             return False
         with open(tp, "rb") as f:
-            meta = base64.b64encode(f.read()).decode()
+            raw_meta = f.read()
+        # 先取 tracker 注入 metainfo(否则转过去无 tracker 无法做种)
+        _trk = self._get_tracker(h)
+        if _trk:
+            raw_meta = self._inject_tracker(raw_meta, _trk)
+        meta = base64.b64encode(raw_meta).decode()
         try:
             res = self._tr_rpc('torrent-add', {'metainfo': meta, 'download-dir': self._topath, 'paused': True})
         except Exception as e:
